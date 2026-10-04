@@ -27,6 +27,12 @@ typedef void (*gm_match_sink)(const gm_match *match, void *context);
 
 const char *gm_morph_name(gm_morph morph);
 
+/*
+ * Count exact byte matches, including overlaps. All supplied ranges must refer
+ * to valid memory. NULL data, an empty needle, or a needle larger than the
+ * haystack returns zero without reading either range. sink may be NULL.
+ * No case folding or encoding conversion occurs here.
+ */
 size_t gm_search_exact(
     const uint8_t *haystack,
     size_t haystack_length,

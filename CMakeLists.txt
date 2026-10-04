@@ -13,9 +13,17 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 add_library(grepmorph_core
     src/morph.c
     src/search.c
+    src/file_search.c
 )
 
 target_include_directories(grepmorph_core PUBLIC src)
+
+if(UNIX)
+    target_compile_definitions(grepmorph_core PRIVATE
+        _POSIX_C_SOURCE=200809L
+        _FILE_OFFSET_BITS=64
+    )
+endif()
 
 add_executable(grepmorph
     src/main.c
