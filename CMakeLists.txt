@@ -14,6 +14,7 @@ add_library(grepmorph_core
     src/morph.c
     src/search.c
     src/file_search.c
+    src/walk.c
 )
 
 target_include_directories(grepmorph_core PUBLIC src)

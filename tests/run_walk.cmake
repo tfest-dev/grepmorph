@@ -1,0 +1,10 @@
+cmake_minimum_required(VERSION 3.20)
+file(REMOVE_RECURSE "${WORK_DIR}")
+file(MAKE_DIRECTORY "${WORK_DIR}")
+execute_process(COMMAND "${PROGRAM}" "${CASE}" "${WORK_DIR}"
+    RESULT_VARIABLE code OUTPUT_VARIABLE output ERROR_VARIABLE error TIMEOUT 20)
+if("${code}" STREQUAL "77")
+    message("SKIP: ${output}")
+elseif(NOT "${code}" STREQUAL "0")
+    message(FATAL_ERROR "${CASE}: exit ${code}; stdout: ${output}; stderr: ${error}")
+endif()

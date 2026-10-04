@@ -7,6 +7,9 @@
 
 #ifdef _WIN32
 #include <io.h>
+#include <fcntl.h>
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
 #else
 #include <fcntl.h>
 #include <unistd.h>
@@ -114,11 +117,56 @@ const char *gm_scan_status_name(gm_scan_status status) {
 }
 
 FILE *gm_open_regular_file(const char *path) {
+    return gm_open_regular_file_with_links(path, true);
+}
+
+FILE *gm_open_regular_file_with_links(const char *path, bool follow_links) {
     if(path == NULL || path[0] == '\0') {
         errno = EINVAL;
         return NULL;
     }
 #ifdef _WIN32
+    if(!follow_links) {
+        const HANDLE handle = CreateFileA(
+            path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            NULL, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, NULL
+        );
+        if(handle == INVALID_HANDLE_VALUE) {
+            const DWORD code = GetLastError();
+            switch(code) {
+                case ERROR_FILE_NOT_FOUND:
+                case ERROR_PATH_NOT_FOUND: errno = ENOENT; break;
+                case ERROR_ACCESS_DENIED:
+                case ERROR_SHARING_VIOLATION: errno = EACCES; break;
+                case ERROR_TOO_MANY_OPEN_FILES: errno = EMFILE; break;
+                default: errno = EIO; break;
+            }
+            return NULL;
+        }
+        BY_HANDLE_FILE_INFORMATION information;
+        if(GetFileType(handle) != FILE_TYPE_DISK ||
+           !GetFileInformationByHandle(handle, &information) ||
+           (information.dwFileAttributes &
+            (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) != 0) {
+            (void)CloseHandle(handle);
+            errno = EINVAL;
+            return NULL;
+        }
+        const int descriptor = _open_osfhandle((intptr_t)handle, _O_RDONLY | _O_BINARY);
+        if(descriptor < 0) {
+            const int code = errno;
+            (void)CloseHandle(handle);
+            errno = code;
+            return NULL;
+        }
+        FILE *result = _fdopen(descriptor, "rb");
+        if(result == NULL) {
+            const int code = errno;
+            (void)_close(descriptor);
+            errno = code;
+        }
+        return result;
+    }
     struct _stat64 metadata;
     if(_stat64(path, &metadata) != 0) {
         return NULL;
@@ -147,7 +195,9 @@ FILE *gm_open_regular_file(const char *path) {
     return stream;
 #else
     /* Nonblocking open prevents a named pipe from hanging before fstat. */
-    const int descriptor = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+    const int descriptor = open(
+        path, O_RDONLY | O_NONBLOCK | O_CLOEXEC | (follow_links ? 0 : O_NOFOLLOW)
+    );
     if(descriptor < 0) {
         return NULL;
     }

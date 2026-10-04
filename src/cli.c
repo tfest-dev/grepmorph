@@ -1,6 +1,7 @@
 #include "cli.h"
 #include "file_search.h"
 #include "grepmorph.h"
+#include "walk.h"
 
 #include <errno.h>
 #include <inttypes.h>
@@ -19,13 +20,15 @@ static void print_usage(FILE *stream, const char *program) {
         "grepmorph %s\n"
         "Representation-aware binary search.\n\n"
         "Usage:\n"
-        "  %s [--hex] [--] <query> <file> ...\n"
+        "  %s [-r|--recursive] [--hex] [--] <query> <path> ...\n"
         "  %s --help\n"
         "  %s --version\n\n"
         "Queries are literal, case-sensitive bytes; escapes are not interpreted.\n"
         "--hex accepts hexadecimal byte pairs, optionally separated by whitespace.\n"
         "-- ends option parsing, allowing a query beginning with '-'.\n"
-        "Only explicit regular files are supported in this increment.\n\n"
+        "-r, --recursive searches directories as well as files.\n"
+        "Explicit paths follow links; discovered links and special files are skipped.\n"
+        "Hidden files are included; no ignore rules are applied.\n\n"
         "Output: file:0x<16-digit byte offset>:raw\n"
         "Exit codes: 0 = matches, 1 = no matches, 2 = invalid input or I/O error.\n",
         GREPMORPH_VERSION, program, program, program
@@ -113,6 +116,45 @@ static void report_open_error(const char *path, int error) {
 #endif
 }
 
+typedef struct {
+    const uint8_t *needle;
+    size_t needle_length;
+    bool any_match;
+    bool any_error;
+    bool output_failed;
+} search_context;
+
+static void report_path_error(const char *path, const char *message, void *context) {
+    search_context *search = context;
+    report_file_error(path, message);
+    search->any_error = true;
+}
+
+static bool search_file(const char *path, bool explicit_input, void *context) {
+    search_context *search = context;
+    FILE *stream = gm_open_regular_file_with_links(path, explicit_input);
+    if(stream == NULL) {
+        report_open_error(path, errno);
+        search->any_error = true;
+        return true;
+    }
+    output_context output = {.path = path, .output_failed = false};
+    uint64_t count = 0;
+    const gm_scan_status status = gm_search_stream(
+        stream, search->needle, search->needle_length, GM_MORPH_RAW,
+        GM_DEFAULT_CHUNK_SIZE, 0, print_match, &output, &count
+    );
+    if(count != 0) search->any_match = true;
+    if(status != GM_SCAN_OK) report_path_error(path, gm_scan_status_name(status), search);
+    if(fclose(stream) != 0) report_path_error(path, "file close failed", search);
+    if(output.output_failed) {
+        search->any_error = true;
+        search->output_failed = true;
+        return false;
+    }
+    return true;
+}
+
 int gm_cli_run(int argc, char **argv) {
     const char *program = (argc > 0 && argv != NULL && argv[0] != NULL) ?
                           argv[0] : "grepmorph";
@@ -122,6 +164,7 @@ int gm_cli_run(int argc, char **argv) {
     }
 
     bool hex = false;
+    bool recursive = false;
     int argument = 1;
     for(; argument < argc && argv[argument][0] == '-'; ++argument) {
         if(strcmp(argv[argument], "--") == 0) {
@@ -140,11 +183,16 @@ int gm_cli_run(int argc, char **argv) {
             hex = true;
             continue;
         }
+        if((strcmp(argv[argument], "-r") == 0 ||
+            strcmp(argv[argument], "--recursive") == 0) && !recursive) {
+            recursive = true;
+            continue;
+        }
         fputs("grepmorph: unknown or repeated option; use --help\n", stderr);
         return 2;
     }
     if(argc - argument < 2) {
-        fputs("grepmorph: provide a nonempty query and at least one file\n", stderr);
+        fputs("grepmorph: provide a nonempty query and at least one path\n", stderr);
         return 2;
     }
 
@@ -165,40 +213,17 @@ int gm_cli_run(int argc, char **argv) {
         return 2;
     }
 
-    bool any_match = false;
-    bool any_error = false;
-    for(; argument < argc; ++argument) {
-        const char *path = argv[argument];
-        FILE *stream = gm_open_regular_file(path);
-        if(stream == NULL) {
-            report_open_error(path, errno);
-            any_error = true;
-            continue;
-        }
-        output_context output = {.path = path, .output_failed = false};
-        uint64_t count = 0;
-        const gm_scan_status status = gm_search_stream(
-            stream, needle, needle_length, GM_MORPH_RAW,
-            GM_DEFAULT_CHUNK_SIZE, 0, print_match, &output, &count
+    search_context search = {.needle = needle, .needle_length = needle_length};
+    for(; argument < argc && !search.output_failed; ++argument) {
+        const gm_walk_status status = gm_walk_path(
+            argv[argument], recursive, search_file, report_path_error, &search
         );
-        if(count != 0) any_match = true;
-        if(status != GM_SCAN_OK) {
-            report_file_error(path, gm_scan_status_name(status));
-            any_error = true;
-        }
-        if(fclose(stream) != 0) {
-            report_file_error(path, "file close failed");
-            any_error = true;
-        }
-        if(output.output_failed) {
-            any_error = true;
-            break;
-        }
+        if(status != GM_WALK_OK) search.any_error = true;
     }
     if(fflush(stdout) != 0 || ferror(stdout)) {
         fputs("grepmorph: output write failed\n", stderr);
-        any_error = true;
+        search.any_error = true;
     }
     free(owned_needle);
-    return any_error ? 2 : (any_match ? 0 : 1);
+    return search.any_error ? 2 : (search.any_match ? 0 : 1);
 }

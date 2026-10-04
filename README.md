@@ -7,11 +7,12 @@ representations instead of trying to guess how that value was stored.
 
 ## Status
 
-The first usable search increment is implemented:
+Raw file search and recursive directory discovery are implemented:
 
 - a C17 build with CMake;
 - a typed morph model and exact, case-sensitive byte matcher;
 - explicit-file searches, including multiple inputs;
+- opt-in `-r` / `--recursive` directory searches with deterministic ordering;
 - literal queries and `--hex` binary queries (including NUL bytes);
 - bounded, chunked file input with cross-boundary and overlapping matches;
 - 64-bit absolute offsets and morph-labelled results;
@@ -20,13 +21,15 @@ The first usable search increment is implemented:
 - optional ASan/UBSan builds and cross-platform GitHub Actions CI.
 
 Only the **raw morph** is operational. UTF-16, numeric, hex-text, Base64 and gap-search
-strategies are not implemented merely because their identifiers exist. Recursive directory
-walking is the next input feature; directories and special files are currently rejected.
+strategies are not implemented merely because their identifiers exist. Directories require
+`-r`; explicitly named special files are rejected.
 
 ## Usage
 
 ```sh
 ./build/grepmorph 'DRAGONCAT' storage.bin accounts.bin
+./build/grepmorph -r 'DRAGONCAT' data/ archives/
+./build/grepmorph -r --hex '00 ff 00' tests/fixtures/
 ./build/grepmorph --hex 'FD B1 04 00 00 01' capture.bin
 ./build/grepmorph -- '-query-starting-with-a-dash' example.bin
 ```
@@ -44,7 +47,10 @@ example.bin:0x0000000000000012:raw
 
 Backslashes and ASCII control characters in filenames are escaped in output. Results go
 to standard output; diagnostics go to standard error. Files are scanned in argument order.
-Other readable files are still searched after an input error.
+Within each directory, entries are visited depth-first in bytewise name order (not locale
+collation). Other readable entries and subsequent input paths are still searched after an
+input error. Overlapping input paths are searched independently, so naming a file and its
+parent directory can report that file twice.
 
 Exit codes are `0` for at least one match, `1` for no matches, and `2` for invalid input,
 file errors or output errors. An error takes precedence over any matches already emitted.
@@ -56,9 +62,34 @@ There is no file-size-sized allocation or conversion of file sizes to `int`. The
 reads from the current stream position; the stream API's explicit base offset supports
 embedding and 64-bit offset tests without seeking or allocating multi-gigabyte fixtures.
 
-Explicit symlinks to regular files follow platform path resolution; there is no recursive
-symlink traversal. Windows currently uses narrow C-runtime paths (the system code page),
-not a full Unicode-native path layer. Scanning a changing file does not provide a snapshot.
+### Directory traversal policy
+
+Use `-r` or `--recursive` before the query to enable directory searching. Without it,
+directories produce a diagnostic and exit status `2`; explicit file searches are unchanged.
+
+- **Explicit paths:** follow platform link resolution. A symlink to a regular file is
+  searchable, and an explicitly named directory link is searchable with `-r`.
+- **Discovered entries:** skip symbolic links, all Windows reparse points (including
+  junctions), and special files such as FIFOs, devices and sockets. Broken discovered
+  links are skipped; an explicitly named broken link is an error.
+- **Coverage and errors:** include hidden files and directories. No `.gitignore`, `.git`
+  or build-directory exclusions are applied. Missing/unreadable entries and directory
+  enumeration failures produce diagnostics and exit status `2`, even when other files match.
+
+No `--follow` option, filtering, deduplication or parallel traversal is implemented. Skipped
+entry types are part of the defined search scope, not input errors. Searching `-r .` therefore
+includes `.git/` and `build/`; target a data directory for a narrower scan.
+
+The walker uses an explicit heap-backed pending-path stack rather than recursive C calls.
+It closes directory enumeration handles before descending. Path storage grows with queued
+entries (and sorting requires collecting each directory's entries); it is not constant-memory
+metadata traversal, but it does not collect the entire tree before searching. Paths are allocated
+dynamically rather than truncated into fixed-size arrays; operating-system path limits still apply.
+
+Discovered regular files are opened without following a final symlink/reparse point. Ancestor
+path components still use platform path resolution. Directory traversal is path-based, not a
+snapshot or a security boundary against concurrent, hostile namespace changes. Windows still
+uses narrow paths in the system code page, not a full Unicode-native/long-path layer.
 
 ## Terminology
 
@@ -117,14 +148,21 @@ A deterministic differential test compares streaming against in-memory results i
 cases. POSIX additionally tests a forced file-read error. These tests do not certify every
 possible input, and high-offset tests do not scan a physical multi-gigabyte fixture.
 
+Traversal tests cover ordered nested results, multiple roots, hidden files, trailing separators,
+`.` / `..` roots, link loops, broken links, vanished queued files, early-stop cleanup, wide
+directories, and raw/hex searches across chunk boundaries within subdirectories. POSIX tests
+also cover FIFOs, unreadable directories, and a 100-level tree with a 32-descriptor soft limit.
+Permission tests are explicitly skipped when run as root. Cross-platform symlink fixtures are
+explicitly skipped when the host cannot create symbolic links (for example, restricted Windows
+accounts); those skips are not evidence that the link behaviour passed.
+
 ## Next implementation steps
 
-1. Recursive file discovery with explicit symlink and error policies.
-2. UTF-8 / UTF-16LE / UTF-16BE pattern generation and per-morph comparison semantics.
-3. Hex-text and numeric LE/BE morphs.
-4. Base64-region decode-and-search rather than encoded-query substring matching.
-5. Contextual and JSON result output.
-6. Explicit `--max-gap N` ordered sparse matching.
+1. UTF-8 / UTF-16LE / UTF-16BE pattern generation and per-morph comparison semantics.
+2. Hex-text and numeric LE/BE morphs.
+3. Base64-region decode-and-search rather than encoded-query substring matching.
+4. Contextual and JSON result output.
+5. Explicit `--max-gap N` ordered sparse matching.
 
 C-style escaped-query syntax can be added explicitly later; `--hex` already provides
 an unambiguous route for arbitrary binary queries.

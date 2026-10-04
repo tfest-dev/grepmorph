@@ -3,6 +3,7 @@
 
 #include "grepmorph.h"
 
+#include <stdbool.h>
 #include <stdio.h>
 
 #define GM_DEFAULT_CHUNK_SIZE ((size_t)65536)
@@ -41,5 +42,9 @@ const char *gm_scan_status_name(gm_scan_status status);
 
 /* Open a regular file read-only in binary mode. NULL on error, with errno set. */
 FILE *gm_open_regular_file(const char *path);
+
+/* As above, but refuse a final symlink/reparse point when follow_links is false.
+ * Ancestor components still follow platform resolution; this is not a sandbox. */
+FILE *gm_open_regular_file_with_links(const char *path, bool follow_links);
 
 #endif
