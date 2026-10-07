@@ -26,6 +26,12 @@ if(UNIX)
     )
 endif()
 
+if(APPLE)
+    # Darwin hides O_NOFOLLOW when only _POSIX_C_SOURCE is selected.
+    # Enable the declared flag; never replace it with zero or drop protection.
+    target_compile_definitions(grepmorph_core PRIVATE _DARWIN_C_SOURCE=1)
+endif()
+
 add_executable(grepmorph
     src/main.c
     src/cli.c

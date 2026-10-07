@@ -13,7 +13,8 @@ typedef enum {
     GM_SCAN_INVALID_ARGUMENT,
     GM_SCAN_NO_MEMORY,
     GM_SCAN_IO_ERROR,
-    GM_SCAN_OFFSET_OVERFLOW
+    GM_SCAN_OFFSET_OVERFLOW,
+    GM_SCAN_MATCH_OVERFLOW
 } gm_scan_status;
 
 /*
@@ -36,6 +37,19 @@ gm_scan_status gm_search_stream(
     gm_match_sink sink,
     void *context,
     uint64_t *match_count
+);
+
+/*
+ * Scan all patterns in a single file pass. Memory is chunk_size + longest
+ * pattern length - 1. Matches are ordered by offset, then pattern array order;
+ * a match is emitted once per pattern even when morphs have identical bytes.
+ * Final short-pattern hits are flushed at EOF. Lengths and offsets are bytes.
+ * The single-pattern API above is a convenience wrapper around this engine.
+ */
+gm_scan_status gm_search_stream_patterns(
+    FILE *stream, const gm_pattern *patterns, size_t pattern_count,
+    size_t chunk_size, uint64_t base_offset, gm_match_sink sink,
+    void *context, uint64_t *match_count
 );
 
 const char *gm_scan_status_name(gm_scan_status status);

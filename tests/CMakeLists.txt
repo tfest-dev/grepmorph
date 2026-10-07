@@ -1,4 +1,4 @@
-foreach(target test_search test_stream test_walk)
+foreach(target test_search test_stream test_walk test_morph test_multi_stream test_text_cli)
     add_executable(${target} ${target}.c)
     target_link_libraries(${target} PRIVATE grepmorph_core)
     grepmorph_set_warnings(${target})
@@ -70,4 +70,41 @@ foreach(case nested long_option single_file no_match empty hidden mixed_paths er
         -P "${CMAKE_CURRENT_SOURCE_DIR}/test_recursive.cmake")
     set_tests_properties(recursive_${case} PROPERTIES
         TIMEOUT 30 SKIP_REGULAR_EXPRESSION "SKIP:")
+endforeach()
+
+foreach(case ascii bmp supplementary binary_and_bom truncated overlong invalid_scalar
+             invalid_continuation selection_and_ownership invalid_arguments no_normalisation all_scalars)
+    add_test(NAME morph_${case} COMMAND test_morph ${case})
+endforeach()
+set_tests_properties(morph_all_scalars PROPERTIES TIMEOUT 120)
+
+foreach(case text_boundaries tails_and_overlaps order_and_identical high_offsets invalid
+             differential no_sink)
+    add_test(NAME multi_stream_${case} COMMAND test_multi_stream ${case}
+        "${CMAKE_CURRENT_BINARY_DIR}/multi-stream-${case}.bin")
+endforeach()
+
+target_sources(test_text_cli PRIVATE ../src/cli.c)
+foreach(case invalid_text invalid_selected unicode raw_invalid_utf8)
+    add_test(NAME text_cli_${case} COMMAND test_text_cli ${case}
+        "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/text-unicode.bin")
+endforeach()
+set_tests_properties(text_cli_invalid_text text_cli_invalid_selected PROPERTIES
+    PASS_REGULAR_EXPRESSION "invalid UTF-8 query at byte 1")
+set_tests_properties(text_cli_unicode PROPERTIES PASS_REGULAR_EXPRESSION "utf16-be")
+
+set(text_cases bundle utf8 le be subset_order raw_utf8 raw default_raw text_hex hex_text
+    morph_hex hex_morph text_morph morph_text duplicate_text duplicate_morph missing_morph
+    unsupported_morph empty_text no_match case_sensitive recursive error_precedence missing_path
+    dash_query odd_offset truncated_wide no_terminator)
+if(UNIX)
+    list(APPEND text_cases unicode)
+endif()
+foreach(case IN LISTS text_cases)
+    add_test(NAME text_${case} COMMAND ${CMAKE_COMMAND}
+        "-DPROGRAM=$<TARGET_FILE:grepmorph>"
+        "-DCASE=${case}"
+        "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/text-${case}"
+        "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/test_text.cmake")
 endforeach()

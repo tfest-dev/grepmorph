@@ -1,6 +1,7 @@
 #include "cli.h"
 #include "file_search.h"
 #include "grepmorph.h"
+#include "morph.h"
 #include "walk.h"
 
 #include <errno.h>
@@ -20,16 +21,20 @@ static void print_usage(FILE *stream, const char *program) {
         "grepmorph %s\n"
         "Representation-aware binary search.\n\n"
         "Usage:\n"
-        "  %s [-r|--recursive] [--hex] [--] <query> <path> ...\n"
+        "  %s [-r|--recursive] [--hex | --text | --morph NAME ...] [--] <query> <path> ...\n"
         "  %s --help\n"
         "  %s --version\n\n"
         "Queries are literal, case-sensitive bytes; escapes are not interpreted.\n"
         "--hex accepts hexadecimal byte pairs, optionally separated by whitespace.\n"
+        "--text searches validated UTF-8 text as utf8, utf16-le and utf16-be.\n"
+        "--morph NAME selects raw, utf8, utf16-le or utf16-be; repeat for a subset.\n"
+        "--hex, --text and --morph are mutually exclusive query modes.\n"
+        "Text matching is exact: no case folding, normalisation or BOM required.\n"
         "-- ends option parsing, allowing a query beginning with '-'.\n"
         "-r, --recursive searches directories as well as files.\n"
         "Explicit paths follow links; discovered links and special files are skipped.\n"
         "Hidden files are included; no ignore rules are applied.\n\n"
-        "Output: file:0x<16-digit byte offset>:raw\n"
+        "Output: file:0x<16-digit byte offset>:<morph>\n"
         "Exit codes: 0 = matches, 1 = no matches, 2 = invalid input or I/O error.\n",
         GREPMORPH_VERSION, program, program, program
     );
@@ -117,8 +122,7 @@ static void report_open_error(const char *path, int error) {
 }
 
 typedef struct {
-    const uint8_t *needle;
-    size_t needle_length;
+    const gm_morph_set *morphs;
     bool any_match;
     bool any_error;
     bool output_failed;
@@ -140,8 +144,8 @@ static bool search_file(const char *path, bool explicit_input, void *context) {
     }
     output_context output = {.path = path, .output_failed = false};
     uint64_t count = 0;
-    const gm_scan_status status = gm_search_stream(
-        stream, search->needle, search->needle_length, GM_MORPH_RAW,
+    const gm_scan_status status = gm_search_stream_patterns(
+        stream, search->morphs->patterns, search->morphs->count,
         GM_DEFAULT_CHUNK_SIZE, 0, print_match, &output, &count
     );
     if(count != 0) search->any_match = true;
@@ -164,6 +168,8 @@ int gm_cli_run(int argc, char **argv) {
     }
 
     bool hex = false;
+    bool text = false;
+    unsigned int selection = 0;
     bool recursive = false;
     int argument = 1;
     for(; argument < argc && argv[argument][0] == '-'; ++argument) {
@@ -179,8 +185,30 @@ int gm_cli_run(int argc, char **argv) {
             puts(GREPMORPH_VERSION);
             return fflush(stdout) == 0 ? 0 : 2;
         }
-        if(strcmp(argv[argument], "--hex") == 0 && !hex) {
+        if(strcmp(argv[argument], "--hex") == 0 && !hex && !text && selection == 0) {
             hex = true;
+            continue;
+        }
+        if(strcmp(argv[argument], "--text") == 0 && !hex && !text && selection == 0) {
+            text = true;
+            continue;
+        }
+        if(strcmp(argv[argument], "--morph") == 0 && !hex && !text) {
+            if(argument + 1 >= argc) {
+                fputs("grepmorph: --morph requires a name\n", stderr);
+                return 2;
+            }
+            const char *name = argv[++argument];
+            unsigned int bit = 0;
+            if(strcmp(name, "raw") == 0) bit = GM_SELECT_RAW;
+            else if(strcmp(name, "utf8") == 0) bit = GM_SELECT_UTF8;
+            else if(strcmp(name, "utf16-le") == 0) bit = GM_SELECT_UTF16_LE;
+            else if(strcmp(name, "utf16-be") == 0) bit = GM_SELECT_UTF16_BE;
+            if(bit == 0 || (selection & bit) != 0) {
+                fputs("grepmorph: unsupported or repeated morph; use --help\n", stderr);
+                return 2;
+            }
+            selection |= bit;
             continue;
         }
         if((strcmp(argv[argument], "-r") == 0 ||
@@ -188,7 +216,7 @@ int gm_cli_run(int argc, char **argv) {
             recursive = true;
             continue;
         }
-        fputs("grepmorph: unknown or repeated option; use --help\n", stderr);
+        fputs("grepmorph: unknown, repeated or conflicting option; use --help\n", stderr);
         return 2;
     }
     if(argc - argument < 2) {
@@ -213,7 +241,21 @@ int gm_cli_run(int argc, char **argv) {
         return 2;
     }
 
-    search_context search = {.needle = needle, .needle_length = needle_length};
+    if(text) selection = GM_SELECT_TEXT;
+    if(selection == 0) selection = GM_SELECT_RAW;
+    gm_morph_set morphs = {0};
+    size_t error_offset = 0;
+    const gm_morph_status compiled = gm_morph_generate(
+        needle, needle_length, selection, &morphs, &error_offset
+    );
+    free(owned_needle);
+    if(compiled != GM_MORPH_OK) {
+        fprintf(stderr, "grepmorph: %s", gm_morph_status_name(compiled));
+        if(compiled == GM_MORPH_INVALID_UTF8) fprintf(stderr, " at byte %zu", error_offset);
+        fputc('\n', stderr);
+        return 2;
+    }
+    search_context search = {.morphs = &morphs};
     for(; argument < argc && !search.output_failed; ++argument) {
         const gm_walk_status status = gm_walk_path(
             argv[argument], recursive, search_file, report_path_error, &search
@@ -224,6 +266,6 @@ int gm_cli_run(int argc, char **argv) {
         fputs("grepmorph: output write failed\n", stderr);
         search.any_error = true;
     }
-    free(owned_needle);
+    gm_morph_set_free(&morphs);
     return search.any_error ? 2 : (search.any_match ? 0 : 1);
 }

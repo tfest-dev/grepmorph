@@ -17,6 +17,13 @@ typedef enum {
     GM_MORPH_UINT_BE
 } gm_morph;
 
+/* A borrowed byte pattern. The owner keeps bytes alive during a search. */
+typedef struct {
+    const uint8_t *bytes;
+    size_t length;
+    gm_morph morph;
+} gm_pattern;
+
 typedef struct {
     uint64_t offset;
     size_t length;
