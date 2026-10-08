@@ -1,4 +1,4 @@
-foreach(target test_search test_stream test_walk test_morph test_multi_stream test_text_cli)
+foreach(target test_search test_stream test_walk test_morph test_multi_stream test_text_cli test_hex_numeric)
     add_executable(${target} ${target}.c)
     target_link_libraries(${target} PRIVATE grepmorph_core)
     grepmorph_set_warnings(${target})
@@ -107,4 +107,34 @@ foreach(case IN LISTS text_cases)
         "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/text-${case}"
         "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
         -P "${CMAKE_CURRENT_SOURCE_DIR}/test_text.cmake")
+endforeach()
+
+foreach(case hex_bytes hex_all_bytes hex_overflow compare_rules tiny_compare integer_widths
+             integer_ranges integer_syntax integer_exhaustive selection_and_ownership
+             stream_hex stream_integers stream_invalid_rule)
+    add_test(NAME hex_numeric_${case} COMMAND test_hex_numeric ${case}
+        "${CMAKE_CURRENT_BINARY_DIR}/hex-numeric-${case}.bin")
+endforeach()
+set_tests_properties(hex_numeric_integer_exhaustive hex_numeric_selection_and_ownership PROPERTIES TIMEOUT 120)
+
+foreach(case
+    hex_literal hex_binary hex_binary_reordered hex_and_raw
+    hex_is_not_input_decoding raw_stays_case_sensitive hex_numeric_lexeme uint16_le
+    uint16_be uint32_le uint32_be uint64_le
+    uint64_be uint8 integer_hex_lexeme integer_upper_prefix
+    leading_zero_is_decimal uint64_max uint64_max_hex all_fitting_integer_widths
+    mixed_text_numeric numeric_boundary no_match u8_overflow
+    u16_overflow u32_overflow u64_overflow u64_hex_overflow
+    negative positive_sign space float
+    exponent separator no_prefix empty_prefix
+    narrow_width_not_omitted widthless_rejected signed_rejected duplicate_morph
+    hex_integer_conflict integer_hex_conflict hex_unicode_conflict text_integer_conflict
+    recursive error_precedence hex_overlap hex_separators_not_ignored
+    hex_boundary)
+    add_test(NAME values_${case} COMMAND ${CMAKE_COMMAND}
+        "-DPROGRAM=$<TARGET_FILE:grepmorph>"
+        "-DCASE=${case}"
+        "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/values-${case}"
+        "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/test_values.cmake")
 endforeach()

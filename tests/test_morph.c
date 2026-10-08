@@ -8,7 +8,7 @@
 static void expect(const uint8_t *query, size_t length,
                    const uint8_t *le, size_t wide_length) {
     gm_morph_set set = {0};
-    CHECK(gm_morph_generate(query, length, GM_SELECT_ALL, &set, NULL) == GM_MORPH_OK);
+    CHECK(gm_morph_generate(query, length, (GM_SELECT_RAW | GM_SELECT_TEXT), &set, NULL) == GM_MORPH_OK);
     CHECK(set.count == 4 && set.storage != NULL);
     for(size_t i = 0; i < 4; ++i) CHECK(set.patterns[i].morph == (gm_morph)i);
     CHECK(set.patterns[0].length == length && set.patterns[1].length == length);
@@ -114,10 +114,10 @@ static void selection_and_ownership(void) {
     CHECK(query != NULL);
     query[0] = 'a';
     gm_morph_set set = {0};
-    for(unsigned int selection = 1; selection <= GM_SELECT_ALL; ++selection) {
+    for(unsigned int selection = 1; selection <= (GM_SELECT_RAW | GM_SELECT_TEXT); ++selection) {
         CHECK(gm_morph_generate(query, 1, selection, &set, NULL) == GM_MORPH_OK);
         size_t count = 0;
-        for(unsigned int kind = 0; kind < GM_MAX_QUERY_MORPHS; ++kind) {
+        for(unsigned int kind = 0; kind <= GM_MORPH_UTF16_BE; ++kind) {
             if((selection & (1u << kind)) == 0) continue;
             CHECK(set.patterns[count].morph == (gm_morph)kind);
             CHECK(set.patterns[count].length == (kind < 2 ? 1u : 2u));
@@ -141,10 +141,10 @@ static void invalid_arguments(void) {
     CHECK(gm_morph_generate(NULL, 1, GM_SELECT_RAW, &set, NULL) == GM_MORPH_INVALID_ARGUMENT);
     CHECK(gm_morph_generate(&byte, 0, GM_SELECT_RAW, &set, NULL) == GM_MORPH_INVALID_ARGUMENT);
     CHECK(gm_morph_generate(&byte, 1, 0, &set, NULL) == GM_MORPH_INVALID_ARGUMENT);
-    CHECK(gm_morph_generate(&byte, 1, GM_SELECT_ALL + 1u, &set, NULL) == GM_MORPH_INVALID_ARGUMENT);
-    CHECK(gm_morph_generate(&byte, 1, GM_SELECT_ALL, NULL, NULL) == GM_MORPH_INVALID_ARGUMENT);
+    CHECK(gm_morph_generate(&byte, 1, (1u << GM_MORPH_BASE64_DECODED), &set, NULL) == GM_MORPH_INVALID_ARGUMENT);
+    CHECK(gm_morph_generate(&byte, 1, (GM_SELECT_RAW | GM_SELECT_TEXT), NULL, NULL) == GM_MORPH_INVALID_ARGUMENT);
     const uint8_t invalid = 0xff;
-    CHECK(gm_morph_generate(&invalid, 1, GM_SELECT_ALL, &set, NULL) == GM_MORPH_INVALID_UTF8);
+    CHECK(gm_morph_generate(&invalid, 1, (GM_SELECT_RAW | GM_SELECT_TEXT), &set, NULL) == GM_MORPH_INVALID_UTF8);
     CHECK(set.storage == NULL && set.count == 0);
     gm_morph_set_free(NULL);
     for(int i = GM_MORPH_OK; i <= GM_MORPH_NO_MEMORY; ++i) {

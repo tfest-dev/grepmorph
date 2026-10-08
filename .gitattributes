@@ -1,0 +1,3 @@
+# Preserve exact fixture bytes across Git checkouts.
+*.bin binary
+*.utf8 -text

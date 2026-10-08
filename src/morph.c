@@ -14,8 +14,58 @@ const char *gm_morph_name(gm_morph morph) {
         case GM_MORPH_BASE64_DECODED: return "base64-decoded";
         case GM_MORPH_UINT_LE:        return "uint-le";
         case GM_MORPH_UINT_BE:        return "uint-be";
+        case GM_MORPH_UINT8: return "uint8";
+        case GM_MORPH_UINT16_LE: return "uint16-le";
+        case GM_MORPH_UINT16_BE: return "uint16-be";
+        case GM_MORPH_UINT32_LE: return "uint32-le";
+        case GM_MORPH_UINT32_BE: return "uint32-be";
+        case GM_MORPH_UINT64_LE: return "uint64-le";
+        case GM_MORPH_UINT64_BE: return "uint64-be";
         default:                      return "unknown";
     }
+}
+
+typedef struct {
+    gm_morph morph;
+    size_t width;
+    bool big_endian;
+} integer_spec;
+
+static const integer_spec integers[] = {
+    {GM_MORPH_UINT8, 1, false},
+    {GM_MORPH_UINT16_LE, 2, false}, {GM_MORPH_UINT16_BE, 2, true},
+    {GM_MORPH_UINT32_LE, 4, false}, {GM_MORPH_UINT32_BE, 4, true},
+    {GM_MORPH_UINT64_LE, 8, false}, {GM_MORPH_UINT64_BE, 8, true},
+};
+
+static gm_morph_status parse_integer(const uint8_t *query, size_t length,
+                                    uint64_t *value, size_t *error_offset) {
+    size_t offset = 0;
+    unsigned int base = 10;
+    if(length >= 2 && query[0] == '0' && (query[1] == 'x' || query[1] == 'X')) {
+        offset = 2;
+        base = 16;
+    }
+    if(offset == length) {
+        if(error_offset != NULL) *error_offset = offset;
+        return GM_MORPH_INVALID_INTEGER;
+    }
+    uint64_t result = 0;
+    for(; offset < length; ++offset) {
+        const uint8_t byte = query[offset];
+        unsigned int digit = 16;
+        if(byte >= '0' && byte <= '9') digit = (unsigned int)(byte - '0');
+        else if(byte >= 'a' && byte <= 'f') digit = (unsigned int)(byte - 'a') + 10u;
+        else if(byte >= 'A' && byte <= 'F') digit = (unsigned int)(byte - 'A') + 10u;
+        if(digit >= base) {
+            if(error_offset != NULL) *error_offset = offset;
+            return GM_MORPH_INVALID_INTEGER;
+        }
+        if(result > (UINT64_MAX - digit) / base) return GM_MORPH_INTEGER_RANGE;
+        result = result * base + digit;
+    }
+    *value = result;
+    return GM_MORPH_OK;
 }
 
 /* Decode one scalar, accepting only shortest-form UTF-8, never surrogates.
@@ -80,6 +130,21 @@ gm_morph_status gm_morph_generate(
     if(query == NULL || length == 0 || selection == 0 ||
        (selection & ~GM_SELECT_ALL) != 0) return GM_MORPH_INVALID_ARGUMENT;
 
+    size_t hex_length = 0;
+    if((selection & GM_SELECT_HEX_TEXT) != 0) {
+        if(length > SIZE_MAX / 2) return GM_MORPH_SIZE_OVERFLOW;
+        hex_length = length * 2;
+    }
+    uint64_t integer = 0;
+    if((selection & GM_SELECT_UINT) != 0) {
+        const gm_morph_status parsed = parse_integer(query, length, &integer, error_offset);
+        if(parsed != GM_MORPH_OK) return parsed;
+        for(size_t i = 0; i < sizeof(integers) / sizeof(integers[0]); ++i) {
+            const integer_spec *spec = &integers[i];
+            if((selection & (1u << spec->morph)) != 0 && spec->width < 8 &&
+               integer >= (UINT64_C(1) << (spec->width * 8))) return GM_MORPH_INTEGER_RANGE;
+        }
+    }
     size_t wide_length = 0;
     if((selection & GM_SELECT_TEXT) != 0) {
         for(size_t offset = 0; offset < length;) {
@@ -102,6 +167,14 @@ gm_morph_status gm_morph_generate(
             capacity += wide_length;
         }
     }
+    if(hex_length > SIZE_MAX - capacity) return GM_MORPH_SIZE_OVERFLOW;
+    capacity += hex_length;
+    for(size_t i = 0; i < sizeof(integers) / sizeof(integers[0]); ++i) {
+        if((selection & (1u << integers[i].morph)) != 0) {
+            if(integers[i].width > SIZE_MAX - capacity) return GM_MORPH_SIZE_OVERFLOW;
+            capacity += integers[i].width;
+        }
+    }
     uint8_t *storage = malloc(capacity);
     if(storage == NULL) return GM_MORPH_NO_MEMORY;
     gm_morph_set result = {.storage = storage};
@@ -110,22 +183,23 @@ gm_morph_status gm_morph_generate(
         memcpy(storage, query, length);
         written = length;
         if((selection & GM_SELECT_RAW) != 0) {
-            result.patterns[result.count++] = (gm_pattern){storage, length, GM_MORPH_RAW};
+            result.patterns[result.count++] = (gm_pattern){storage, length, GM_MORPH_RAW, GM_COMPARE_EXACT};
         }
         if((selection & GM_SELECT_UTF8) != 0) {
-            result.patterns[result.count++] = (gm_pattern){storage, length, GM_MORPH_UTF8};
+            result.patterns[result.count++] = (gm_pattern){storage, length, GM_MORPH_UTF8, GM_COMPARE_EXACT};
         }
     }
     uint8_t *le = NULL;
     uint8_t *be = NULL;
     if((selection & GM_SELECT_UTF16_LE) != 0) {
         le = storage + written;
-        result.patterns[result.count++] = (gm_pattern){le, wide_length, GM_MORPH_UTF16_LE};
+        result.patterns[result.count++] = (gm_pattern){le, wide_length, GM_MORPH_UTF16_LE, GM_COMPARE_EXACT};
         written += wide_length;
     }
     if((selection & GM_SELECT_UTF16_BE) != 0) {
         be = storage + written;
-        result.patterns[result.count++] = (gm_pattern){be, wide_length, GM_MORPH_UTF16_BE};
+        result.patterns[result.count++] = (gm_pattern){be, wide_length, GM_MORPH_UTF16_BE, GM_COMPARE_EXACT};
+        written += wide_length;
     }
     if(le != NULL || be != NULL) {
         size_t wide_offset = 0;
@@ -149,6 +223,31 @@ gm_morph_status gm_morph_generate(
             offset += used;
         }
     }
+    if(hex_length != 0) {
+        static const uint8_t digits[] = "0123456789abcdef";
+        uint8_t *bytes = storage + written;
+        for(size_t i = 0; i < length; ++i) {
+            bytes[i * 2] = digits[query[i] >> 4];
+            bytes[i * 2 + 1] = digits[query[i] & 0x0fu];
+        }
+        result.patterns[result.count++] = (gm_pattern){
+            bytes, hex_length, GM_MORPH_HEX_TEXT, GM_COMPARE_HEX_TEXT
+        };
+        written += hex_length;
+    }
+    for(size_t i = 0; i < sizeof(integers) / sizeof(integers[0]); ++i) {
+        const integer_spec *spec = &integers[i];
+        if((selection & (1u << spec->morph)) == 0) continue;
+        uint8_t *bytes = storage + written;
+        for(size_t byte = 0; byte < spec->width; ++byte) {
+            const size_t index = spec->big_endian ? spec->width - byte - 1 : byte;
+            bytes[index] = (uint8_t)((integer >> (byte * 8)) & UINT64_C(0xff));
+        }
+        result.patterns[result.count++] = (gm_pattern){
+            bytes, spec->width, spec->morph, GM_COMPARE_EXACT
+        };
+        written += spec->width;
+    }
     *out = result;
     return GM_MORPH_OK;
 }
@@ -160,6 +259,8 @@ const char *gm_morph_status_name(gm_morph_status status) {
         case GM_MORPH_INVALID_UTF8:     return "invalid UTF-8 query";
         case GM_MORPH_SIZE_OVERFLOW:    return "query morph size overflow";
         case GM_MORPH_NO_MEMORY:        return "cannot allocate query morphs";
+        case GM_MORPH_INVALID_INTEGER: return "invalid unsigned integer query";
+        case GM_MORPH_INTEGER_RANGE: return "integer value does not fit every selected width (maximum 64 bits)";
         default:                       return "unknown morph error";
     }
 }

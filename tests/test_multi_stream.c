@@ -81,10 +81,10 @@ static void text_boundaries(void) {
 static void tails_and_overlaps(void) {
     const uint8_t data[] = "aaaaaaaaaa";
     const gm_pattern patterns[] = {
-        {(const uint8_t *)"a", 1, GM_MORPH_RAW},
-        {(const uint8_t *)"aa", 2, GM_MORPH_UTF8},
-        {(const uint8_t *)"aaaaa", 5, GM_MORPH_UTF16_LE},
-        {(const uint8_t *)"aaaaaaaaaaaaaaaa", 16, GM_MORPH_UTF16_BE}
+        {(const uint8_t *)"a", 1, GM_MORPH_RAW, GM_COMPARE_EXACT},
+        {(const uint8_t *)"aa", 2, GM_MORPH_UTF8, GM_COMPARE_EXACT},
+        {(const uint8_t *)"aaaaa", 5, GM_MORPH_UTF16_LE, GM_COMPARE_EXACT},
+        {(const uint8_t *)"aaaaaaaaaaaaaaaa", 16, GM_MORPH_UTF16_BE, GM_COMPARE_EXACT}
     };
     for(size_t length = 0; length < sizeof(data); ++length) {
         for(size_t chunk = 1; chunk <= 17; ++chunk) compare(data, length, patterns, 4, chunk, 0);
@@ -93,8 +93,8 @@ static void tails_and_overlaps(void) {
 
 static void order_and_identical(void) {
     const gm_pattern patterns[] = {
-        {(const uint8_t *)"a", 1, GM_MORPH_UTF16_BE},
-        {(const uint8_t *)"a", 1, GM_MORPH_RAW}
+        {(const uint8_t *)"a", 1, GM_MORPH_UTF16_BE, GM_COMPARE_EXACT},
+        {(const uint8_t *)"a", 1, GM_MORPH_RAW, GM_COMPARE_EXACT}
     };
     FILE *stream = fixture((const uint8_t *)"aa", 2);
     matches result = {0};
@@ -111,8 +111,8 @@ static void order_and_identical(void) {
 
 static void high_offsets(void) {
     const gm_pattern patterns[] = {
-        {(const uint8_t *)"a", 1, GM_MORPH_RAW},
-        {(const uint8_t *)"aaa", 3, GM_MORPH_UTF16_LE}
+        {(const uint8_t *)"a", 1, GM_MORPH_RAW, GM_COMPARE_EXACT},
+        {(const uint8_t *)"aaa", 3, GM_MORPH_UTF16_LE, GM_COMPARE_EXACT}
     };
     for(size_t chunk = 1; chunk < 6; ++chunk) {
         compare((const uint8_t *)"aaa", 3, patterns, 2, chunk, UINT64_MAX - 2);
@@ -127,7 +127,7 @@ static void high_offsets(void) {
 
 static void invalid(void) {
     const uint8_t byte = 0;
-    gm_pattern pattern = {&byte, 1, GM_MORPH_RAW};
+    gm_pattern pattern = {&byte, 1, GM_MORPH_RAW, GM_COMPARE_EXACT};
     FILE *stream = fixture(NULL, 0);
     uint64_t count = 123;
     CHECK(gm_search_stream_patterns(NULL, &pattern, 1, 1, 0, NULL, NULL, &count) == GM_SCAN_INVALID_ARGUMENT);
@@ -160,7 +160,7 @@ static void differential(void) {
         for(size_t p = 0; p < 4; ++p) {
             const size_t n = 1u + next_random() % 17u;
             for(size_t i = 0; i < n; ++i) bytes[p][i] = (uint8_t)(next_random() % 4u);
-            patterns[p] = (gm_pattern){bytes[p], n, (gm_morph)p};
+            patterns[p] = (gm_pattern){bytes[p], n, (gm_morph)p, GM_COMPARE_EXACT};
             if(n <= length && trial % 2 == 0) memcpy(data + length - n, bytes[p], n);
         }
         for(size_t chunk = 1; chunk <= 22; chunk += 3) {
@@ -171,8 +171,8 @@ static void differential(void) {
 
 static void no_sink(void) {
     const gm_pattern patterns[] = {
-        {(const uint8_t *)"a", 1, GM_MORPH_RAW},
-        {(const uint8_t *)"aa", 2, GM_MORPH_UTF8}
+        {(const uint8_t *)"a", 1, GM_MORPH_RAW, GM_COMPARE_EXACT},
+        {(const uint8_t *)"aa", 2, GM_MORPH_UTF8, GM_COMPARE_EXACT}
     };
     FILE *stream = fixture((const uint8_t *)"aaa", 3);
     uint64_t count;

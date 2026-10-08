@@ -30,7 +30,9 @@ gm_scan_status gm_search_stream_patterns(
        chunk_size == 0 || match_count == NULL) return GM_SCAN_INVALID_ARGUMENT;
     size_t longest = 0;
     for(size_t i = 0; i < pattern_count; ++i) {
-        if(patterns[i].bytes == NULL || patterns[i].length == 0) {
+        if(patterns[i].bytes == NULL || patterns[i].length == 0 ||
+           (patterns[i].comparison != GM_COMPARE_EXACT &&
+            patterns[i].comparison != GM_COMPARE_HEX_TEXT)) {
             return GM_SCAN_INVALID_ARGUMENT;
         }
         if(patterns[i].length > longest) longest = patterns[i].length;
@@ -61,8 +63,7 @@ gm_scan_status gm_search_stream_patterns(
         for(size_t offset = 0; offset < ready; ++offset) {
             for(size_t i = 0; i < pattern_count; ++i) {
                 const gm_pattern *pattern = &patterns[i];
-                if(pattern->length > available - offset ||
-                   memcmp(buffer + offset, pattern->bytes, pattern->length) != 0) continue;
+                if(!gm_pattern_matches(buffer + offset, available - offset, pattern)) continue;
                 if(*match_count == UINT64_MAX) {
                     status = GM_SCAN_MATCH_OVERFLOW;
                     goto done;
@@ -94,7 +95,10 @@ gm_scan_status gm_search_stream(
     size_t chunk_size, uint64_t base_offset, gm_match_sink sink,
     void *context, uint64_t *match_count
 ) {
-    const gm_pattern pattern = {needle, needle_length, morph};
+    const gm_pattern pattern = {
+        .bytes = needle, .length = needle_length, .morph = morph,
+        .comparison = GM_COMPARE_EXACT,
+    };
     return gm_search_stream_patterns(stream, &pattern, 1, chunk_size, base_offset,
                                      sink, context, match_count);
 }

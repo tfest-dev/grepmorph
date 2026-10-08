@@ -40,11 +40,11 @@ gm_scan_status gm_search_stream(
 );
 
 /*
- * Scan all patterns in a single file pass. Memory is chunk_size + longest
+ * Scan all patterns in a single file pass using each comparison rule. Memory is chunk_size + longest
  * pattern length - 1. Matches are ordered by offset, then pattern array order;
  * a match is emitted once per pattern even when morphs have identical bytes.
  * Final short-pattern hits are flushed at EOF. Lengths and offsets are bytes.
- * The single-pattern API above is a convenience wrapper around this engine.
+ * The single-pattern API above is an exact-only wrapper, regardless of label.
  */
 gm_scan_status gm_search_stream_patterns(
     FILE *stream, const gm_pattern *patterns, size_t pattern_count,

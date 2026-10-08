@@ -21,14 +21,19 @@ static void print_usage(FILE *stream, const char *program) {
         "grepmorph %s\n"
         "Representation-aware binary search.\n\n"
         "Usage:\n"
-        "  %s [-r|--recursive] [--hex | --text | --morph NAME ...] [--] <query> <path> ...\n"
+        "  %s [options] [--] <query> <path> ...\n"
         "  %s --help\n"
         "  %s --version\n\n"
         "Queries are literal, case-sensitive bytes; escapes are not interpreted.\n"
         "--hex accepts hexadecimal byte pairs, optionally separated by whitespace.\n"
         "--text searches validated UTF-8 text as utf8, utf16-le and utf16-be.\n"
-        "--morph NAME selects raw, utf8, utf16-le or utf16-be; repeat for a subset.\n"
-        "--hex, --text and --morph are mutually exclusive query modes.\n"
+        "--morph NAME selects a representation; repeat for a subset:\n"
+        "  raw, utf8, utf16-le, utf16-be, hex-text, uint8,\n"
+        "  uint16-le, uint16-be, uint32-le, uint32-be, uint64-le, uint64-be.\n"
+        "hex-text encodes query bytes as contiguous hex; only A-F ignore case.\n"
+        "Integer morphs accept unsigned decimal or 0x hex; every width must fit.\n"
+        "--hex may combine with --morph raw and/or --morph hex-text only.\n"
+        "--text cannot combine with --hex or --morph.\n"
         "Text matching is exact: no case folding, normalisation or BOM required.\n"
         "-- ends option parsing, allowing a query beginning with '-'.\n"
         "-r, --recursive searches directories as well as files.\n"
@@ -185,7 +190,7 @@ int gm_cli_run(int argc, char **argv) {
             puts(GREPMORPH_VERSION);
             return fflush(stdout) == 0 ? 0 : 2;
         }
-        if(strcmp(argv[argument], "--hex") == 0 && !hex && !text && selection == 0) {
+        if(strcmp(argv[argument], "--hex") == 0 && !hex && !text) {
             hex = true;
             continue;
         }
@@ -193,7 +198,7 @@ int gm_cli_run(int argc, char **argv) {
             text = true;
             continue;
         }
-        if(strcmp(argv[argument], "--morph") == 0 && !hex && !text) {
+        if(strcmp(argv[argument], "--morph") == 0 && !text) {
             if(argument + 1 >= argc) {
                 fputs("grepmorph: --morph requires a name\n", stderr);
                 return 2;
@@ -204,6 +209,14 @@ int gm_cli_run(int argc, char **argv) {
             else if(strcmp(name, "utf8") == 0) bit = GM_SELECT_UTF8;
             else if(strcmp(name, "utf16-le") == 0) bit = GM_SELECT_UTF16_LE;
             else if(strcmp(name, "utf16-be") == 0) bit = GM_SELECT_UTF16_BE;
+            else if(strcmp(name, "hex-text") == 0) bit = GM_SELECT_HEX_TEXT;
+            else if(strcmp(name, "uint8") == 0) bit = GM_SELECT_UINT8;
+            else if(strcmp(name, "uint16-le") == 0) bit = GM_SELECT_UINT16_LE;
+            else if(strcmp(name, "uint16-be") == 0) bit = GM_SELECT_UINT16_BE;
+            else if(strcmp(name, "uint32-le") == 0) bit = GM_SELECT_UINT32_LE;
+            else if(strcmp(name, "uint32-be") == 0) bit = GM_SELECT_UINT32_BE;
+            else if(strcmp(name, "uint64-le") == 0) bit = GM_SELECT_UINT64_LE;
+            else if(strcmp(name, "uint64-be") == 0) bit = GM_SELECT_UINT64_BE;
             if(bit == 0 || (selection & bit) != 0) {
                 fputs("grepmorph: unsupported or repeated morph; use --help\n", stderr);
                 return 2;
@@ -217,6 +230,10 @@ int gm_cli_run(int argc, char **argv) {
             continue;
         }
         fputs("grepmorph: unknown, repeated or conflicting option; use --help\n", stderr);
+        return 2;
+    }
+    if(hex && (selection & ~(GM_SELECT_RAW | GM_SELECT_HEX_TEXT)) != 0) {
+        fputs("grepmorph: --hex supports only raw and hex-text morphs\n", stderr);
         return 2;
     }
     if(argc - argument < 2) {
@@ -251,7 +268,9 @@ int gm_cli_run(int argc, char **argv) {
     free(owned_needle);
     if(compiled != GM_MORPH_OK) {
         fprintf(stderr, "grepmorph: %s", gm_morph_status_name(compiled));
-        if(compiled == GM_MORPH_INVALID_UTF8) fprintf(stderr, " at byte %zu", error_offset);
+        if(compiled == GM_MORPH_INVALID_UTF8 || compiled == GM_MORPH_INVALID_INTEGER) {
+            fprintf(stderr, " at byte %zu", error_offset);
+        }
         fputc('\n', stderr);
         return 2;
     }

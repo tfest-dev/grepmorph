@@ -7,7 +7,7 @@ representations instead of trying to guess how that value was stored.
 
 ## Status
 
-Raw/text morph searches and recursive directory discovery are implemented:
+Raw, text, hex-text and unsigned integer searches plus recursive discovery are implemented:
 
 - a C17 build with CMake;
 - a typed morph model and exact, case-sensitive byte matcher;
@@ -15,6 +15,8 @@ Raw/text morph searches and recursive directory discovery are implemented:
 - opt-in `-r` / `--recursive` directory searches with deterministic ordering;
 - literal queries and `--hex` binary queries (including NUL bytes);
 - validated UTF-8 text with genuine UTF-16LE/BE conversion, including surrogate pairs;
+- contiguous hex-text with an explicit ASCII A-F-only comparison rule;
+- unsigned 8/16/32/64-bit integer morphs with checked parsing and explicit byte order;
 - reusable query morphs searched together in one file pass;
 - bounded, chunked file input with cross-boundary and overlapping matches;
 - 64-bit absolute offsets and morph-labelled results;
@@ -22,8 +24,10 @@ Raw/text morph searches and recursive directory discovery are implemented:
 - tests whose checks remain active in Debug and Release;
 - optional ASan/UBSan builds and cross-platform GitHub Actions CI.
 
-The operational morphs are **raw, utf8, utf16-le and utf16-be**. Numeric, hex-text,
-Base64 and gap-search strategies are not implemented merely because their identifiers exist.
+The operational morphs are **raw, utf8, utf16-le, utf16-be, hex-text, uint8,
+uint16-le, uint16-be, uint32-le, uint32-be, uint64-le and uint64-be**.
+Base64 and gap-search strategies remain unimplemented. Widthless `uint-le` and `uint-be`
+identifiers remain reserved; they are not accepted as CLI selections.
 Directories require `-r`; explicitly named special files are rejected.
 
 ## Usage
@@ -35,13 +39,17 @@ Directories require `-r`; explicitly named special files are rejected.
 ./build/grepmorph --morph utf16-le --morph utf16-be 'DRAGONCAT' storage.bin
 ./build/grepmorph -r --hex '00 ff 00' tests/fixtures/
 ./build/grepmorph --hex 'FD B1 04 00 00 01' capture.bin
+./build/grepmorph --morph hex-text 'DRAGONCAT' data.bin
+./build/grepmorph --hex --morph hex-text 'FD B1 04 00 00 01' capture.txt
+./build/grepmorph --morph uint16-le --morph uint16-be 12000 data.bin
 ./build/grepmorph -- '-query-starting-with-a-dash' example.bin
 ```
 
 Queries are literal and case-sensitive by default. Backslashes are not escape sequences.
 `--hex` accepts a nonempty, even number of ASCII hex digits, optionally separated by
-ASCII whitespace. It specifies **raw query bytes**, not a hex-text morph or decoding of
-the file. For example, `--hex '61 62 63'` searches for `abc`, not the text `616263`.
+ASCII whitespace. It specifies **query bytes**, not decoding of the file. Alone, it retains
+its raw-search behaviour: `--hex '61 62 63'` searches for `abc`, not the text `616263`.
+To search the textual hex form instead, select `--hex --morph hex-text '61 62 63'`.
 
 ### Text and morph selection
 
@@ -50,12 +58,15 @@ Existing commands remain raw byte searches. Text conversion is explicit:
 | Query mode | Behaviour |
 | --- | --- |
 | No mode option | Literal bytes, labelled `raw`; no UTF-8 validation. |
-| `--hex` | Raw bytes supplied as hex, including NUL and non-UTF-8 bytes. |
+| `--hex` | Query bytes supplied as hex; raw search by default. May select raw and/or hex-text. |
 | `--text` | Validate UTF-8 and search `utf8`, `utf16-le`, and `utf16-be`. |
-| `--morph NAME` | Select `raw`, `utf8`, `utf16-le`, or `utf16-be`; repeat for a subset. |
+| `--morph NAME` | Select any operational morph listed above; repeat for a subset. |
 
-`--hex`, `--text` and explicit `--morph` selection cannot be combined. Duplicate morphs,
-unknown/unimplemented names and empty queries are errors. Selecting any text morph validates
+`--text` cannot combine with `--hex` or explicit morph selection. `--hex` may combine
+with `--morph raw` and/or `--morph hex-text`, in either option order, but not with text
+or numeric morphs. This deliberately extends previously rejected option combinations;
+previously valid commands keep their behaviour. Duplicate morphs, unknown/unimplemented
+names and empty queries are errors. Selecting any text morph validates
 the entire query as UTF-8 **before opening input paths**, even when raw is also selected.
 An error names the zero-based byte offset at the start of the invalid sequence. Raw-only
 searches continue accepting arbitrary bytes; malformed text is never silently replaced.
@@ -108,13 +119,67 @@ signals retains its normal behaviour (for example, a broken Unix pipe can raise 
 
 Morphs are compiled once per query and reused for every file. All selected morphs share
 one file read pass; hits within each file are ordered by byte offset, then by fixed morph
-order (`raw`, `utf8`, `utf16-le`, `utf16-be`), independently of chunk sizes or option order.
+order (`raw`, `utf8`, `utf16-le`, `utf16-be`, `hex-text`, `uint8`, then 16/32/64-bit
+integers with LE before BE), independently of chunk sizes or option order.
 The input buffer uses 64 KiB plus `longest morph length - 1` overlap bytes, not the whole file.
 Unfinished tail starts wait for the next chunk; at EOF shorter morphs are still searched.
 Query morph storage is separate and proportional to the query size, not file size.
 There is no file-size-sized allocation or conversion of file sizes to `int`. The scanner
 reads from the current stream position; the stream API's explicit base offset supports
 embedding and 64-bit offset tests without seeking or allocating multi-gigabyte fixtures.
+
+### Hex-text morphs
+
+`--morph hex-text 'kL'` generates the bytes for `6b4c` and finds `6b4c`, `6B4C` and
+mixed-case equivalents. Only the ASCII letters A-F are folded; no locale, Unicode or
+blanket case-insensitive rule is applied to raw, UTF or numeric patterns.
+
+For arbitrary binary queries, including zero bytes:
+
+```sh
+./build/grepmorph --hex --morph hex-text '00 ff 00' data.txt
+./build/grepmorph --hex --morph raw --morph hex-text '00 ff 00' mixed.bin
+```
+
+The first command searches contiguous `00ff00` text. The second also searches the actual
+three bytes `00 FF 00`, preserving a separate label for each representation.
+
+This is a substring search for **contiguous hex characters**, not a parser of hex dumps.
+`00 ff 00`, `00:ff:00` and escaped byte lists do not match the contiguous form. Matches
+may start at any character in a longer hex run, including an odd nibble position; a
+hex-text label alone does not prove the surrounding region is encoded data. Automatic
+hex-of-UTF-16 composition is not included: hex-text always encodes the supplied query bytes.
+
+### Unsigned integer morphs
+
+Use `uint8`, or `uint16-le`, `uint16-be`, `uint32-le`, `uint32-be`, `uint64-le`, `uint64-be`.
+Width is explicit and is part of the result label. A one-byte value has no endianness.
+
+```sh
+./build/grepmorph --morph uint16-le --morph uint16-be 12000 data.bin
+./build/grepmorph --morph uint32-le --morph uint32-be 0x2EE0 data.bin
+./build/grepmorph --morph raw --morph hex-text --morph uint16-le 12000 data.bin
+```
+
+Both `12000` and `0x2EE0` produce `E0 2E` for uint16-le and `2E E0` for uint16-be.
+Integers accept the entire query as unsigned decimal or `0x`/`0X`-prefixed hex.
+Leading zeros remain decimal (`010` is ten). Signs, whitespace, separators, floating-point,
+exponent, implicit-octal and binary-prefix syntax are rejected. Parsing checks overflow
+before arithmetic and never relies on host byte order or the size of C `long`.
+
+The value must fit **every selected width**. For example, 65536 with both uint16-le and
+uint32-le is an error before scanning; the smaller morph is neither truncated nor silently
+omitted. Values range from zero to 2^width - 1, up to 18446744073709551615 for 64 bits.
+Zero can generate many matches in padded files; choose the width intentionally.
+
+Textual morphs combined with numeric morphs search the **supplied spelling**. For example,
+raw plus uint16-le with `0x2EE0` searches that literal text and the corresponding two-byte
+integer, not the additional decimal rendering `12000`.
+
+There is no alignment restriction. Narrower forms can legitimately occur inside wider
+forms, and LE/BE forms can have identical bytes (for example, zero). Each selected morph
+gets its own result; matches are evidence of bytes, not proof of an integer field boundary.
+Signed integers, floats, varints and automatic width inference are not implemented.
 
 ### Directory traversal policy
 
@@ -217,7 +282,22 @@ results, alongside EOF tails, differing pattern lengths, ties and high-offset ar
 CLI tests exercise mode conflicts, selected morphs, recursive text searches and byte labels.
 The external non-ASCII argv test is POSIX-only; explicit UTF-8 CLI-layer tests run everywhere.
 
+New adds checks for all 256 hex source bytes, all 65,536 unsigned 16-bit values in both
+byte orders (decimal and prefixed-hex queries), all 4,095 nonempty morph subsets with a
+value fitting every width, integer boundaries and overflow, and comparison-rule isolation.
+Additional tests exercise mixed raw/hex/numeric stream tails, overlaps, 64 KiB boundaries,
+long patterns, recursive searches and pre-scan rejection. API callers now initialise the
+`gm_pattern.comparison` field explicitly; its zero value is `GM_COMPARE_EXACT`.
+`gm_search_exact` and the single-pattern stream wrapper remain exact regardless of label.
+
 ### Platform and CI notes
+
+The Windows failure was in the CLI test fixtures: out-of-range `(char)0xED`-style
+constant casts raised MSVC C4310 under `/W4 /WX`. Those fixtures now declare unsigned
+byte arrays and copy their object representations into `char` argument buffers with
+`memcpy`, preserving byte values and terminators without narrowing conversions. Tests
+also verify those copied bytes. Warning levels and error promotion remain unchanged.
+Binary fixtures are marked binary in `.gitattributes` to preserve checkout bytes.
 
 On macOS the core is compiled with `_DARWIN_C_SOURCE=1` as well as `_POSIX_C_SOURCE=200809L`.
 Darwin's headers hide `O_NOFOLLOW` under strict POSIX selection without this extension macro.
@@ -232,10 +312,9 @@ cross-platform CI execution; a successful Linux run does not validate Darwin or 
 
 ## Next implementation steps
 
-1. Hex-text and numeric LE/BE morphs with explicit comparison/width semantics.
-2. Base64-region decode-and-search rather than encoded-query substring matching.
-3. Contextual and JSON result output.
-4. Explicit `--max-gap N` ordered sparse matching.
+1. Base64-region decode-and-search rather than encoded-query substring matching.
+2. Contextual and JSON result output.
+3. Explicit `--max-gap N` ordered sparse matching.
 
 A Unicode-native Windows argument/path layer remains a documented portability gap.
 
